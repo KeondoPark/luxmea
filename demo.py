@@ -29,6 +29,8 @@ sys.path.append(os.path.join(ROOT_DIR, 'models'))
 from pc_util import random_sampling, read_ply
 from ap_helper import parse_predictions
 
+import torch.autograd.profiler as profiler
+
 def preprocess_point_cloud(point_cloud):
     ''' Prepare the numpy point cloud (N,3) for forward pass '''
     point_cloud = point_cloud[:,0:3] # do not use color for now
@@ -65,7 +67,8 @@ if __name__=='__main__':
     MODEL = importlib.import_module('votenet') # import network module
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     net = MODEL.VoteNet(num_proposal=256, input_feature_dim=1, vote_factor=1,
-        sampling='seed_fps', num_class=DC.num_class,
+        #sampling='seed_fps', num_class=DC.num_class,
+        sampling='vote_fps', num_class=DC.num_class,
         num_heading_bin=DC.num_heading_bin,
         num_size_cluster=DC.num_size_cluster,
         mean_size_arr=DC.mean_size_arr).to(device)
@@ -89,9 +92,23 @@ if __name__=='__main__':
     inputs = {'point_clouds': torch.from_numpy(pc).to(device)}
     tic = time.time()
     with torch.no_grad():
+        #with profiler.profile(with_stack=True, profile_memory=True) as prof:
         end_points = net(inputs)
-    toc = time.time()
-    print('Inference time: %f'%(toc-tic))
+        toc = time.time()
+        print('Inference time: %f'%(toc-tic))
+
+        tic = time.time()
+        end_points2 = net(inputs)
+        toc = time.time()
+        print('Inference time 2nd image: %f'%(toc-tic))
+        
+        #print(prof.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=100))
+        #prof.export_chrome_trace('profiler_trace.json')
+    
+
+    print("Maximum memory allocated:")
+    print(torch.cuda.max_memory_allocated(device))
+
     end_points['point_clouds'] = inputs['point_clouds']
     pred_map_cls = parse_predictions(end_points, eval_config_dict)
     print('Finished detection. %d object detected.'%(len(pred_map_cls[0])))

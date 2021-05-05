@@ -105,26 +105,34 @@ class Pointnet2Backbone(nn.Module):
         xyz, features = self._break_up_pc(pointcloud)
 
         # --------- 4 SET ABSTRACTION LAYERS ---------
+        print("-"*10, "SA1 Layer", "-"*10)
         xyz, features, fps_inds = self.sa1(xyz, features)
         end_points['sa1_inds'] = fps_inds
         end_points['sa1_xyz'] = xyz
         end_points['sa1_features'] = features
 
+        print("-"*10, "SA2 Layer", "-"*10)
         xyz, features, fps_inds = self.sa2(xyz, features) # this fps_inds is just 0,1,...,1023
         end_points['sa2_inds'] = fps_inds
         end_points['sa2_xyz'] = xyz
         end_points['sa2_features'] = features
 
+
+        print("-"*10, "SA3 Layer", "-"*10)
         xyz, features, fps_inds = self.sa3(xyz, features) # this fps_inds is just 0,1,...,511
         end_points['sa3_xyz'] = xyz
         end_points['sa3_features'] = features
 
+
+        print("-"*10, "SA4 Layer", "-"*10)
         xyz, features, fps_inds = self.sa4(xyz, features) # this fps_inds is just 0,1,...,255
         end_points['sa4_xyz'] = xyz
         end_points['sa4_features'] = features
 
         # --------- 2 FEATURE UPSAMPLING LAYERS --------
+        print("-"*10, "FP1 Layer", "-"*10)
         features = self.fp1(end_points['sa3_xyz'], end_points['sa4_xyz'], end_points['sa3_features'], end_points['sa4_features'])
+        print("-"*10, "FP2 Layer", "-"*10)
         features = self.fp2(end_points['sa2_xyz'], end_points['sa3_xyz'], end_points['sa2_features'], features)
         end_points['fp2_features'] = features
         end_points['fp2_xyz'] = end_points['sa2_xyz']

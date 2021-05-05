@@ -22,6 +22,7 @@ from proposal_module import ProposalModule
 from dump_helper import dump_results
 from loss_helper import get_loss
 
+import time
 
 class VoteNet(nn.Module):
     r"""
@@ -93,12 +94,17 @@ class VoteNet(nn.Module):
         end_points['seed_xyz'] = xyz
         end_points['seed_features'] = features
         
+        print("-"*10, "Voting layer", "-"*10)
+        start = time.time()
         xyz, features = self.vgen(xyz, features)
         features_norm = torch.norm(features, p=2, dim=1)
         features = features.div(features_norm.unsqueeze(1))
         end_points['vote_xyz'] = xyz
         end_points['vote_features'] = features
+        end = time.time()
+        #print("Voting module:", end - start)
 
+        print("-"*10, "Proposal layer", "-"*10)
         end_points = self.pnet(xyz, features, end_points)
 
         return end_points

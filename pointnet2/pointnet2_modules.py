@@ -22,6 +22,8 @@ import pointnet2_utils
 import pytorch_utils as pt_utils
 from typing import List
 
+import time
+import torch.autograd.profiler as profiler
 
 class _PointnetSAModuleBase(nn.Module):
 
@@ -230,15 +232,21 @@ class PointnetSAModuleVotes(nn.Module):
             (B, npoint) tensor of the inds
         """
 
+        start = time.time()
         xyz_flipped = xyz.transpose(1, 2).contiguous()
         if inds is None:
-            inds = pointnet2_utils.furthest_point_sample(xyz, self.npoint)
+            inds = pointnet2_utils.furthest_point_sample(xyz, self.npoint)           
         else:
             assert(inds.shape[1] == self.npoint)
+
+
         new_xyz = pointnet2_utils.gather_operation(
             xyz_flipped, inds
         ).transpose(1, 2).contiguous() if self.npoint is not None else None
+        end = time.time()
+        #print("Farthest point sampling", end - start)
 
+        start = time.time()
         if not self.ret_unique_cnt:
             grouped_features, grouped_xyz = self.grouper(
                 xyz, new_xyz, features
@@ -248,6 +256,11 @@ class PointnetSAModuleVotes(nn.Module):
                 xyz, new_xyz, features
             )  # (B, C, npoint, nsample), (B,3,npoint,nsample), (B,npoint)
 
+        end = time.time()
+        #print("Ball query and grouping:", end - start)
+
+        #with profiler.record_function("Shared MLP"):
+        start = time.time()
         new_features = self.mlp_module(
             grouped_features
         )  # (B, mlp[-1], npoint, nsample)
@@ -265,6 +278,8 @@ class PointnetSAModuleVotes(nn.Module):
             rbf = torch.exp(-1 * grouped_xyz.pow(2).sum(1,keepdim=False) / (self.sigma**2) / 2) # (B, npoint, nsample)
             new_features = torch.sum(new_features * rbf.unsqueeze(1), -1, keepdim=True) / float(self.nsample) # (B, mlp[-1], npoint, 1)
         new_features = new_features.squeeze(-1)  # (B, mlp[-1], npoint)
+        end = time.time()
+        #print("SA Shared MLP:", end - start)
 
         if not self.ret_unique_cnt:
             return new_xyz, new_features, inds
@@ -391,14 +406,20 @@ class PointnetFPModule(nn.Module):
         """
 
         if known is not None:
+            start = time.time()
             dist, idx = pointnet2_utils.three_nn(unknown, known)
+            end = time.time()
+            #print("Three nn:", end - start)
             dist_recip = 1.0 / (dist + 1e-8)
             norm = torch.sum(dist_recip, dim=2, keepdim=True)
             weight = dist_recip / norm
 
+            start = time.time()
             interpolated_feats = pointnet2_utils.three_interpolate(
                 known_feats, idx, weight
             )
+            end = time.time()
+            #print("Interpolation:", end - start)
         else:
             interpolated_feats = known_feats.expand(
                 *known_feats.size()[0:2], unknown.size(1)
@@ -411,7 +432,10 @@ class PointnetFPModule(nn.Module):
             new_features = interpolated_feats
 
         new_features = new_features.unsqueeze(-1)
+        start = time.time()
         new_features = self.mlp(new_features)
+        end = time.time()
+        #print("FP Shared MLP:", end - start)
 
         return new_features.squeeze(-1)
 
