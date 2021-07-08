@@ -10,43 +10,54 @@ import time
 import numpy as np
 import array
 import csv
+import os
+import imageio
 
 def take_snapshot_rotation(queue):
     pipeline = rs.pipeline()    
     config = rs.config()
-    config.enable_stream(stream_type=rs.stream.depth, width=480, height=270, format=rs.format.z16, framerate=15)
+    config.enable_stream(stream_type=rs.stream.depth, width=640, height=480, format=rs.format.z16, framerate=30)
+    config.enable_stream(stream_type=rs.stream.color, width=640, height=480, format=rs.format.bgr8, framerate=30)
     pipeline.start(config)
 
     cnt = 0
 
-    try:
-        while True:
-            frames = pipeline.wait_for_frames()
-            cnt += 1
-            if cnt > 5:
-                depth_frame = frames.get_depth_frame()         
-            
-                if not depth_frame:
-                    continue
+    #try:
+    while True:
+        frames = pipeline.wait_for_frames()
+        cnt += 1
+        if cnt > 5:
+            depth_frame = frames.get_depth_frame()   
+            color_frame = frames.get_color_frame()      
+        
+            if not depth_frame or not color_frame:
+                continue
 
-                print("Get depth frame")
+            print("Get depth frame")
 
-                currentTime = time.time()
-                filename = 'snapshot_' + str(currentTime) + '.ply'
-                ply = rs.save_to_ply('point_cloud/' + filename)
-                ply.set_option(rs.save_to_ply.option_ply_binary, False)
-                ply.set_option(rs.save_to_ply.option_ignore_color, True)
-                ply.set_option(rs.save_to_ply.option_ply_normals, False)
-                ply.set_option(rs.save_to_ply.option_ply_mesh, False)
-                print("Saving point cloud...")
-                ply.process(depth_frame)
-                print("Point cloud is created as {}".format(filename))
+            currentTime = time.time()
+            filename = 'snapshot_' + str(currentTime) + '.ply'
+            if not os.path.exists('point_cloud'): os.mkdir('point_cloud')
+            ply = rs.save_to_ply('point_cloud/' + filename)
+            ply.set_option(rs.save_to_ply.option_ply_binary, False)
+            ply.set_option(rs.save_to_ply.option_ignore_color, True)
+            ply.set_option(rs.save_to_ply.option_ply_normals, False)
+            ply.set_option(rs.save_to_ply.option_ply_mesh, False)
+            print("Saving point cloud...")
+            ply.process(depth_frame)
+            print("Point cloud is created as {}".format(filename))
 
-                pipeline.stop()                
-                break
-    except:
-        print("error occurred")
-        pipeline.stop()
+            color_image = np.asanyarray(color_frame.get_data())
+            color_image = color_image[..., ::-1]
+            rgb_filename = filename[:-3] + 'jpg'
+            if not os.path.exists('rgb_image'): os.mkdir('rgb_image')
+            imageio.imwrite('rgb_image/' + rgb_filename, color_image)
+            print("RGB Image is created as {}".format(rgb_filename))
+            pipeline.stop()                
+            break
+    #except:
+    #    print("error occurred")
+    #    pipeline.stop()
 
     with open('point_cloud/' + filename,'r') as input_file:
         header_cnt = 8
@@ -104,7 +115,7 @@ def take_snapshot_rotation(queue):
         new_point_cloud = rot.apply(point_cloud)
 
         # Saving point cloud
-        out_filename = 'rotated_pc.ply'
+        out_filename = filename[:-4] + '_r.ply'
         with open('point_cloud/' + out_filename,'w') as output_file:
             output_file.writelines(header)
             for line in new_point_cloud.tolist():
