@@ -1,0 +1,3 @@
+[submodule "votenet_person"]
+	path = votenet_person
+	url = https://github.com/KeondoPark/votenet_person.git

@@ -263,11 +263,6 @@ def video_feed():
     #Video streaming route. Put this in the src attribute of an img tag
     return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-@app.route('/test', methods=['GET'])
-    print("Test request received")
-    return jsonify({success:True})
-
-
 
 @app.route('/depth_snapshot', methods=['GET'])
 def send_depth_snapshot():
