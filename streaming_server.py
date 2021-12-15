@@ -1,4 +1,4 @@
-from flask import Flask, render_template, Response, jsonify
+from flask import Flask, render_template, Response, jsonify, request
 import time
 import cv2
 import math
@@ -10,6 +10,10 @@ import pyrealsense2 as rs
 from scipy.spatial.transform import Rotation
 from numpy.linalg import norm
 import array
+from io import BytesIO
+
+import os
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 app = Flask(__name__)
 
@@ -17,7 +21,7 @@ class AppState:
 
     def __init__(self, *args, **kwargs):
         self.WIN_NAME = 'RealSense'
-        self.pitch, self.yaw = math.radians(0), math.radians(0)
+        self.pitch, self.yaw = math.radians(-5), math.radians(4)
         self.translation = np.array([0, 0, -1], dtype=np.float32)
         self.distance = 2
         self.prev_mouse = 0, 0
@@ -26,10 +30,22 @@ class AppState:
         self.decimate = 1
         self.scale = True
         self.color = True
+        self.boxes = None
+        self.flicker_cnt = 0
 
     def reset(self):
         self.pitch, self.yaw, self.distance = 0, 0, 2
         self.translation[:] = 0, 0, -1
+
+    def set_boxes(self, boxes):
+        self.boxes = boxes
+
+    def reset_boxes(self):
+        self.boxes = None
+        self.flicker_cnt = 0
+
+    def increase_flikcer_cnt(self):
+        self.flicker_cnt += 1
 
     @property
     def rotation(self):
@@ -47,8 +63,8 @@ state = AppState()
 pipeline = rs.pipeline()
 config = rs.config()
 
-config.enable_stream(rs.stream.depth, width=480, height=270, format=rs.format.z16, framerate=15)
-config.enable_stream(rs.stream.color, rs.format.bgr8, framerate=15)
+config.enable_stream(rs.stream.depth, width=640, height=480, format=rs.format.z16, framerate=15)
+config.enable_stream(rs.stream.color, width=640, height=480, format=rs.format.bgr8, framerate=15)
 
 # Start streaming
 pipeline.start(config)
@@ -227,32 +243,63 @@ def gen_frames():  # generate frame by frame from camera
             verts = np.asanyarray(v).view(np.float32).reshape(-1, 3)  # xyz
             texcoords = np.asanyarray(t).view(np.float32).reshape(-1, 2)  # uv
 
-        # Render
-        now = time.time()
+            # Render
+            now = time.time()
 
-        out.fill(0)
+            out.fill(0)
 
-        grid(out, (0, 0.5, 1), size=1, n=10)
-        frustum(out, depth_intrinsics)
-        axes(out, view([0, 0, 0]), state.rotation, size=0.1, thickness=1)
+            grid(out, (0, 0.5, 1), size=1, n=10)
+            frustum(out, depth_intrinsics)
+            axes(out, view([0, 0, 0]), state.rotation, size=0.1, thickness=1)
 
-        if not state.scale or out.shape[:2] == (h, w):
-            pointcloud(out, verts, texcoords, color_source)
-        else:
-            tmp = np.zeros((h, w, 3), dtype=np.uint8)
-            pointcloud(tmp, verts, texcoords, color_source)
-            tmp = cv2.resize(
-                tmp, out.shape[:2][::-1], interpolation=cv2.INTER_NEAREST)
-            np.putmask(out, tmp > 0, tmp)
+
+            if not state.scale or out.shape[:2] == (h, w):
+                pointcloud(out, verts, texcoords, color_source)
+            else:
+                tmp = np.zeros((h, w, 3), dtype=np.uint8)
+                pointcloud(tmp, verts, texcoords, color_source)
+                tmp = cv2.resize(
+                    tmp, out.shape[:2][::-1], interpolation=cv2.INTER_NEAREST)
+                np.putmask(out, tmp > 0, tmp)
+
+            #Print boxes if there is any
+            if state.boxes is not None:
+                state.increase_flikcer_cnt() # Increase flicker count
+                if state.flicker_cnt % 3 == 0:                
+                    for box in state.boxes:
+                        #Find edges of boxes(Exclude diagonal lines)
+                        edges = {}                    
+                        for i in range(len(box)):
+                            for j in range(i):   
+                                v = tuple(np.round(box[i] - box[j], 3))
+                                minus_v = tuple(np.round(box[j] - box[i], 3))
+                                # Count the number of vectors
+                                if v in edges:                    
+                                    edges[v].append((i,j))
+                                elif minus_v in edges:
+                                    edges[minus_v].append((i,j))
+                                else:
+                                    edges[v] = [(i,j)]                    
+                        
+                        #Draw lines
+                        for k, v in edges.items():
+                            # If there are 4 identical vecs, it is edge
+                            if len(v) == 4:
+                                for (i,j) in v:
+                                    line3d(out, view(box[i]), view(box[j]), (0, 0, 0xff), 1)
+                
+                if state.flicker_cnt >= 30:
+                    state.reset_boxes()
+
         
-        dt = time.time() - now
-        
-        
+            dt = time.time() - now
+            
+            
 
-        ret, buffer = cv2.imencode('.jpg', out)
-        frame = buffer.tobytes()
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')  # concat frame one by one and show result
+            ret, buffer = cv2.imencode('.jpg', out)
+            frame = buffer.tobytes()
+            yield (b'--frame\r\n'
+                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')  # concat frame one by one and show result
     
     # Stop streaming
     pipeline.stop()
@@ -271,112 +318,84 @@ def send_depth_snapshot():
     state.paused = True        
     while True:
         frames = pipeline.wait_for_frames()
-        depth_frame = frames.get_depth_frame()         
+        depth_frame = frames.get_depth_frame() 
+        color_frame = frames.get_color_frame()              
     
-        if not depth_frame:
+        if not depth_frame or not color_frame:
             continue
 
         print("Get depth frame")
 
-        currentTime = time.time()
-        filename = 'snapshot_' + str(currentTime) + '.ply'
-        ply = rs.save_to_ply('point_cloud/' + filename)
-        ply.set_option(rs.save_to_ply.option_ply_binary, False)
-        ply.set_option(rs.save_to_ply.option_ignore_color, True)
-        ply.set_option(rs.save_to_ply.option_ply_normals, False)
-        ply.set_option(rs.save_to_ply.option_ply_mesh, False)
-        print("Saving point cloud...")
-        ply.process(depth_frame)
-        print("Point cloud is created as {}".format(filename))
+        color_image = np.asanyarray(color_frame.get_data())
+        color_image = color_image[..., ::-1]
+
+        #Get intrinsic
+        depth_int = rs.video_stream_profile(depth_frame.profile).get_intrinsics()
+        #w, h = depth_intrinsics.width, depth_intrinsics.height
+        Rtilt = np.reshape(np.eye(3), -1).tolist()
+        K = [depth_int.fx, 0, 0, 0, depth_int.fy, 0, depth_int.ppx, depth_int.ppy, 1]
+
+        #Decimate filter
+        decimate = rs.decimation_filter()        
+        decimate.set_option(rs.option.filter_magnitude, 2 ** 3)
+        depth_frame = decimate.process(depth_frame)
+
+        #Prepare point cloud
+        points = pc.calculate(depth_frame)
+        pc.map_to(depth_frame)
+
+        vertices = points.get_vertices()  
+        verts = np.asanyarray(vertices).view(np.float32).reshape(-1, 3)  # xyz  
         
-        break
+        #Clip far or close points
+        verts = verts[verts[:,2] < 5] # clip where z is farther than 5
+        verts = verts[verts[:,2] > 0.1] # clip where z is closer than 0.1                
+        vertex_cnt = verts.shape[0] 
 
-    print(filename)
-    return jsonify({'filename':filename})
-
-    #TODO: Modifry the code to use rotation
-
-    '''
-    with open('point_cloud/' + filename,'r') as input_file:
-        print("Opened point cloud")
-        header_cnt = 8
-        cnt = 0
-        all_lines = input_file.readlines()        
-        #Get header and data
-        header = all_lines[:header_cnt]
-        split_line = header[3].strip().split(' ')
-        vertex_cnt = int(split_line[2])
-        data = all_lines[header_cnt:(vertex_cnt + header_cnt)]
-                
-        point_cloud = []
-        
         # Random sampling
-        replace = True if vertex_cnt < 20000 else False
+        replace = True if vertex_cnt < 20000 else False 
         sampled_int = np.random.choice(vertex_cnt, 20000, replace=replace)
+        sampled_int = np.sort(sampled_int)
+        point_cloud = verts[sampled_int]        
 
-        
-        if vertex_cnt < 20000:
-            vertex_cnt = vertex_cnt
-        else:
-            vertex_cnt = 20000
-        header[3] = ' '.join(split_line[:2] + [str(vertex_cnt) + '\n']) #We will randomly choose 20000 points, so change the point cloud info
-
-
-        #Get point cloud
-        if vertex_cnt >= 20000:
-            idx = -1
-            for line in data:
-                idx += 1
-                if idx not in sampled_int:
-                    continue
-
-                line_split = line.strip().split(' ')
-                new_line = []
-                
-                for item in line_split:
-                    new_line.append(float(item))
-                point_cloud.append(new_line)   
-        else:         
-            for line in data:                
-                line_split = line.strip().split(' ')
-                new_line = []
-                
-                for item in line_split:
-                    new_line.append(float(item))
-                point_cloud.append(new_line)   
-        
         #Apply rotation by 90 degree along x-axis
         axis = [1,0,0]
         axis = axis / norm(axis)
-        theta = math.pi/2
+        theta = - math.pi/2
         rot = Rotation.from_rotvec(theta * axis)
 
-        new_point_cloud = rot.apply(point_cloud)
+        new_point_cloud = rot.apply(point_cloud)  
+        pc_path = os.path.join(BASE_DIR, 'point_cloud', 'pc.npy')
+        np.save(pc_path, new_point_cloud)
+        print('Rotation completed')   
 
-        # Saving point cloud
-        out_filename = 'rotated_pc.ply'
-        with open('point_cloud/' + out_filename,'w') as output_file:
-            output_file.writelines(header)
-            for line in new_point_cloud.tolist():
-                print_line = ''
-                for item in line:
-                    print_line += "{:.5f}".format(item) + ' '
-                print_line += '\n'
-                output_file.write(print_line)
-        print('Rotation completed')
+        img_path = os.path.join(BASE_DIR, 'rgb_image', 'rgb.npy')
+        np.save(img_path, color_image)
+
+        break
     
-    #state.paused=False
+    #return jsonify({'pointcloud':new_point_cloud.tolist(), 'img': color_image.tolist(), 'calibs': (Rtilt, K)})
+    return jsonify({'pc_path': pc_path, 'img_path': img_path, 'calibs': (Rtilt, K)})
 
-    return jsonify({'filename':filename})
-    '''
-@app.route('/puase_onoff')
-def puase_onoff():
+
+@app.route('/pause_onoff')
+def pause_onoff():
     """Pause on off"""
     if state.paused:
         state.paused = False
     else:
         state.paused = True
     return jsonify({'success':True})
+
+@app.route('/get_boxes', methods=['POST'])
+def get_boxes():        
+    boxes_json = request.json    
+    boxes = np.array(boxes_json['boxes'])
+    
+    state.boxes = boxes
+
+    return jsonify({'success':True})
+
 
 
 @app.route('/')

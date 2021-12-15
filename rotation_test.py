@@ -1,8 +1,13 @@
-import rs_snapshot_rotation
-from multiprocessing import Process, Queue
-q0 = Queue()
-p0 = Process(target=rs_snapshot_rotation.rotation_only, args=(q0,))
-q0.put('snapshot_1619001238.6786714.ply')
-p0.start()
-p0.join()
+import requests
+import json
 
+boxes = [[[-0.10030177,  0.93997832,  1.43933977],
+[-0.65328174,  0.93997832,  1.43934029],
+[-0.65328119,  0.93997832,  2.03130041],
+[-0.10030121,  0.93997832,  2.03129989],
+[-0.10030177,  0.11270336,  1.43933977],
+[-0.65328174,  0.11270336,  1.43934029],
+[-0.65328119,  0.11270336,  2.03130041],
+[-0.10030121,  0.11270336,  2.03129989]]]
+
+requests.post("http://127.0.0.1:5000/get_boxes", json={'boxes':boxes})

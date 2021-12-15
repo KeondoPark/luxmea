@@ -2,18 +2,26 @@ import random
 import time
 
 import speech_recognition as sr
-import rs_snapshot
-import transform
-from votenet_person import votenet_inference
+import os
+import sys
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(BASE_DIR)
+
 import math
 import numpy as np
-import os
 from gtts import gTTS
 from playsound import playsound
 from multiprocessing import Process, Queue
 import rs_snapshot_rotation
 import requests
 import argparse
+from PIL import Image
+import json
+
+sys.path.append(os.path.join(ROOT_DIR, 'votenet_tf'))
+import votenet_inference
 
 SERVER_ADDRESS = "http://127.0.0.1:5000"
 
@@ -27,8 +35,13 @@ def parse_opt():
 def send_request_wrapper(queue):
     res = requests.get(SERVER_ADDRESS + "/depth_snapshot")
     print(res)
-    filename = res.json()['filename']
-    queue.put(filename)
+    pc_path = res.json()['pc_path']
+    img_path = res.json()['img_path']
+    calibs = res.json()['calibs']
+
+    queue.put(pc_path)
+    queue.put(img_path)
+    queue.put(calibs)
 
 def recognize_speech_from_mic(recognizer, microphone):
     """Transcribe speech from recorded from `microphone`.
@@ -91,36 +104,35 @@ if __name__ == "__main__":
     SUPPORTED_CLASS = ['bed','table','chair','toilet','desk','dresser','night_stand','bookshelf','bathtub','person']
     FLAGS = parse_opt()
 
+    # create recognizer and mic instances
+    recognizer = sr.Recognizer()
+    
+    #microphone = sr.Microphone(device_index=2)
+    m, idx = -1, 0
+    for device_name in sr.Microphone().list_microphone_names():
+        if device_name.startswith("ReSpeaker"):
+            m = idx
+            print("Respeaker found, device_index=", m)
+            break
+        idx += 1
 
-    if not FLAGS.ignore_wakeup:
-        # create recognizer and mic instances
-        recognizer = sr.Recognizer()
-        #microphone = sr.Microphone(device_index=2)
-        m, idx = -1, 0
-        for device_name in sr.Microphone().list_microphone_names():
-            if device_name.startswith("ReSpeaker"):
-                m = idx
-                print("Respeaker found, device_index=", m)
-                break
-            idx += 1
+    cnt = 0    
 
-        cnt = 0    
-
-        if m < 0:
-            print("Respeaker not found")        
-        else:
-            microphone = sr.Microphone(device_index=m)
-            
-            #for i in range(NUM_GUESSES):
-                # get the guess from the user
-                # if a transcription is returned, break out of the loop and
-                #     continue
-                # if no transcription returned and API request failed, break
-                #     loop and continue
-                # if API request succeeded but no transcription was returned,
-                #     re-prompt the user to say their guess again. Do this up
-                #     to PROMPT_LIMIT times
+    if m < 0:
+        print("Respeaker not found")        
+    else:
+        microphone = sr.Microphone(device_index=m)
         
+        #for i in range(NUM_GUESSES):
+            # get the guess from the user
+            # if a transcription is returned, break out of the loop and
+            #     continue
+            # if no transcription returned and API request failed, break
+            #     loop and continue
+            # if API request succeeded but no transcription was returned,
+            #     re-prompt the user to say their guess again. Do this up
+            #     to PROMPT_LIMIT times
+    
     while True:            
         proceedToFindTarget = False
 
@@ -129,7 +141,7 @@ if __name__ == "__main__":
             instructions = "Please wake me up by saying Lux Mea"                                    
             playsound('audio_files/wakeup.mp3')                
             listening = recognize_speech_from_mic(recognizer, microphone)
-            proceedToFindTarget = listening['transcription'] and listening['transcription'].lower() in WAKE_UP_WORD or cnt >=3
+            proceedToFindTarget = listening['transcription'] and listening['transcription'].lower() in WAKE_UP_WORD or cnt >=1
             #proceedToFindTarget = listening['transcription']
         else:
             proceedToFindTarget = True
@@ -137,6 +149,7 @@ if __name__ == "__main__":
         if proceedToFindTarget:                            
             while True:       
                 if not FLAGS.target_obj in SUPPORTED_CLASS:                    
+                    
                     # format the instructions string                    
                     instructions = "What are you looking for?"
                     print(instructions)
@@ -185,7 +198,8 @@ if __name__ == "__main__":
                             break
                 else:
                     target_obj = FLAGS.target_obj
-
+                
+                
                 if target_obj in SUPPORTED_CLASS:                            
                     start = time.time()   
                     
@@ -203,7 +217,15 @@ if __name__ == "__main__":
                     # if streaming server is on, send request and get depth image
                     # Otherwise, control the camera directly
                     
-                    res = os.system("ping -c 1 " + SERVER_ADDRESS)
+                    #res = os.system("ping -c 1 " + SERVER_ADDRESS)
+                    #res = os.system("nc -v 127.0.0.1 5000")
+
+                    import socket
+                    a_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+                    location = ("127.0.0.1", 5000)
+                    res = a_socket.connect_ex(location)
+
                     # and then check the response...
                     if res == 0:
                         pingstatus = "Network Active"
@@ -218,34 +240,40 @@ if __name__ == "__main__":
                     
                     p1.start()
                     
-                    instructions = "I will find it for you, please wait around 20 seconds"                                                                                    
+                    instructions = "I will find it for you, please wait for a moment"                                                                                    
+                    #myOutput=gTTS(text=instructions, lang='en', slow=False)
+                    #myOutput.save('audio_files/finditforyou.mp3')             
                     print(instructions)                         
                     playsound('audio_files/finditforyou.mp3')   
                     
-                    p1.join()
-                    rotated_ply = q1.get()
-                    #snapshot_filename = q1.get()
                     
-                    #q2 = Queue()
-                    #q2.put(snapshot_filename)
-                    #p2 = Process(target=rs_snapshot_rotation.rotation_only, args=(q2,))
-                    #p2.start()
-                    #p2.join()
-                    #rotated_ply = q2.get()                           
-
-                    q0.put(rotated_ply)                            
+                    pc_path = q1.get()
+                    img_path = q1.get()
+                    (Rtilt, K) = q1.get()
+                    p1.join()
+                    
+                    q0.put(pc_path)                            
+                    q0.put(img_path)
+                    q0.put((Rtilt, K))
+                    
                     p0.join()
                     
                     predicted_class = q0.get()
                     end = time.time()
-                    print("Total runtime multi processing", end - start)                            
+                    print("Total runtime multi processing", end - start)  
+                    p0.terminate()
+
+                                              
                     
                     targets = []
                     person_found = []
+                    boxes = []
+                    #Turn on streaming again                    
+                    pause_res = requests.get("http://127.0.0.1:5000/pause_onoff")
 
-                    for item in predicted_class[0]:
-                        if target_obj == 'table' and item[0] in [CLASS2TYPE_DICT['desk'], CLASS2TYPE_DICT['table']] \
-                        or item[0] == CLASS2TYPE_DICT[target_obj]:
+                    for item in predicted_class[0][0]:
+                        if target_obj == 'desk' and item[0] in [CLASS2TYPE_DICT['desk'], CLASS2TYPE_DICT['table']] \
+                        or item[0].numpy() == CLASS2TYPE_DICT[target_obj]:
                         #if item[0] == 'chair':
                             found = {}
                             found['center'] = np.mean(item[1], axis=0)
@@ -253,10 +281,11 @@ if __name__ == "__main__":
                             found['score'] = item[2]
                             found['heading_angle'] = item[3]
                             targets.append(found)
+                            boxes.append(item[1].tolist())
                     
                     #Find a person
-                    for item in predicted_class[0]:
-                        if item[0] == CLASS2TYPE_DICT['person']:
+                    for item in predicted_class[0][0]:
+                        if item[0].numpy() == CLASS2TYPE_DICT['person']:
                             found = {}
                             found['center'] = np.mean(item[1], axis=0)
                             found['dist'] = np.linalg.norm(found['center'])
@@ -307,6 +336,8 @@ if __name__ == "__main__":
                         myOutput=gTTS(text=instructions, lang='en', slow=False)
                         myOutput.save('audio_files/guidance.mp3')             
                         print(instructions)
+
+                        requests.post("http://127.0.0.1:5000/get_boxes", json={'boxes':boxes})
                         
                         playsound('audio_files/guidance.mp3')
 
@@ -316,11 +347,11 @@ if __name__ == "__main__":
                     else:
                         p1.join()
                     
-                    #Turn on streaming again
-                    #pause_res = requests.get("http://127.0.0.1:5000/puase_onoff")
+                    
+                    
+                    
                     time.sleep(3)
                         
-                    #print(predicted_class)
             
                         
             break
