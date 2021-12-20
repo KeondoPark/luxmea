@@ -220,10 +220,6 @@ if __name__ == "__main__":
 
                     # if streaming server is on, send request and get depth image
                     # Otherwise, control the camera directly
-                    
-                    #res = os.system("ping -c 1 " + SERVER_ADDRESS)
-                    #res = os.system("nc -v 127.0.0.1 5000")
-
                     import socket
                     a_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
