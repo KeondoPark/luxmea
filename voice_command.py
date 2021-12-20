@@ -23,7 +23,11 @@ import json
 sys.path.append(os.path.join(ROOT_DIR, 'votenet_tf'))
 import votenet_inference
 
-SERVER_ADDRESS = "http://127.0.0.1:5000"
+#SERVER_ADDRESS = "http://127.0.0.1"
+SERVER_ADDRESS = "127.0.0.1"
+SERVER_PORT = 5000
+
+SERVER_ADDRESS_PORT = SERVER_ADDRESS + ":" + str(SERVER_PORT)
 
 def parse_opt():
     parser = argparse.ArgumentParser()
@@ -33,7 +37,7 @@ def parse_opt():
     return FLAGS
 
 def send_request_wrapper(queue):
-    res = requests.get(SERVER_ADDRESS + "/depth_snapshot")
+    res = requests.get(SERVER_ADDRESS_PORT + "/depth_snapshot")
     print(res)
     pc_path = res.json()['pc_path']
     img_path = res.json()['img_path']
@@ -223,20 +227,19 @@ if __name__ == "__main__":
                     import socket
                     a_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-                    location = ("127.0.0.1", 5000)
+                    #location = (SERVER_ADDRESS, SERVER_PORT)
+                    location = (SERVER_ADDRESS, SERVER_PORT)
                     res = a_socket.connect_ex(location)
 
+                    server_on = True if res == 0 else False
+
                     # and then check the response...
-                    if res == 0:
-                        pingstatus = "Network Active"
-                    else:
-                        pingstatus = "Network Error"
-                    print(pingstatus)                    
-                    
-                    if res == 0:
+                    if server_on:                        
+                        print("Server Active")                    
                         p1 = Process(target=send_request_wrapper, args=(q1,))
-                    else:                            
-                        p1 = Process(target=rs_snapshot_rotation.take_snapshot_rotation, args=(q1,))
+                    else:
+                        print("Server Inctive")                    
+                        p1 = Process(target=rs_snapshot_rotation.take_snapshot_rotation, args=(q1,))                                            
                     
                     p1.start()
                     
@@ -261,15 +264,15 @@ if __name__ == "__main__":
                     predicted_class = q0.get()
                     end = time.time()
                     print("Total runtime multi processing", end - start)  
-                    p0.terminate()
-
-                                              
+                    p0.terminate()         
                     
                     targets = []
                     person_found = []
                     boxes = []
-                    #Turn on streaming again                    
-                    pause_res = requests.get("http://127.0.0.1:5000/pause_onoff")
+
+                    if server_on:
+                        #Turn on streaming again                    
+                        pause_res = requests.get(SERVER_ADDRESS_PORT + "/pause_onoff")
 
                     for item in predicted_class[0][0]:
                         if target_obj == 'desk' and item[0] in [CLASS2TYPE_DICT['desk'], CLASS2TYPE_DICT['table']] \
@@ -337,7 +340,8 @@ if __name__ == "__main__":
                         myOutput.save('audio_files/guidance.mp3')             
                         print(instructions)
 
-                        requests.post("http://127.0.0.1:5000/get_boxes", json={'boxes':boxes})
+                        if server_on:
+                            requests.post(SERVER_ADDRESS_PORT + "/get_boxes", json={'boxes':boxes})
                         
                         playsound('audio_files/guidance.mp3')
 
