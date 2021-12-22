@@ -13,11 +13,14 @@ import csv
 import os
 import imageio
 from PIL import Image
+from multiprocessing import Array
 
 import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 save_file = False
+
+#def take_snapshot_rotation(queue):
 
 def take_snapshot_rotation(queue):
     pipeline = rs.pipeline() 
@@ -157,8 +160,7 @@ def take_snapshot_rotation(queue):
         v = points.get_vertices()
         verts = np.asanyarray(v).view(np.float32).reshape(-1, 3)  # xyz        
         verts = verts[verts[:,2] < 5] # clip where z is farther than 10
-        verts = verts[verts[:,2] > 0.1] # clip where z is closer than 0.1        
-        print(verts)
+        verts = verts[verts[:,2] > 0.1] # clip where z is closer than 0.1                
         
         data = verts
         vertex_cnt = data.shape[0]        
@@ -178,13 +180,16 @@ def take_snapshot_rotation(queue):
         axis = axis / norm(axis)
         theta = - math.pi/2
         rot = Rotation.from_rotvec(theta * axis)
-
         new_point_cloud = rot.apply(point_cloud)  
-        pc_path = os.path.join(BASE_DIR, 'point_cloud', 'pc.npy')
-        np.save(pc_path, new_point_cloud)
         print('Rotation completed')   
 
+        #print("Point cloud shape", new_point_cloud.shape) # (20000, 3)
+        pc_path = os.path.join(BASE_DIR, 'point_cloud', 'pc.npy')
+        np.save(pc_path, new_point_cloud)
+        
+
         img_path = os.path.join(BASE_DIR, 'rgb_image', 'rgb.npy')
+        #print("Image shape", color_image.shape) #(480, 640, 3)
         np.save(img_path, color_image)
 
         queue.put(pc_path)
@@ -192,76 +197,13 @@ def take_snapshot_rotation(queue):
         queue.put((Rtilt, K))        
         print("Sending queue finished")
 
-    
-    
+        """ Using shared array for multiprocessing... replaced
+        point_cloud_shared[:] = new_point_cloud
+        img_shared[:] = color_image
+        Rtilt_shared[:] = Rtilt
+        K_shared[:] = K
+        """
 
-    
-            
-    #finally:
-    #    pipeline.stop()
-    #    print("Pipeline finished")
-
-def rotation_only(queue):
-    filename = queue.get()
-    start = time.time()
-
-    header_cnt = 8
-    data = np.genfromtxt('point_cloud/' + filename, skip_header=header_cnt, delimiter=' ', usecols=[0,1,2])
-    with open('point_cloud/' + filename,'r') as input_file:
-        header_cnt = 8
-        cnt = 0
-        all_lines = input_file.readlines()        
-        #Get header and data
-        header = all_lines[:header_cnt]
-        split_line = header[3].strip().split(' ')
-        vertex_cnt = int(split_line[2])
-        #data = np.array([list(map(float,line.strip().split(' '))) for line in all_lines[header_cnt:(vertex_cnt + header_cnt)]])
-                
-        point_cloud = []
-        
-        # Random sampling
-        replace = True if vertex_cnt < 20000 else False
-        sampled_int = np.random.choice(vertex_cnt, 20000, replace=replace)
-
-        
-        if vertex_cnt < 20000:
-            vertex_cnt = vertex_cnt
-        else:
-            vertex_cnt = 20000
-        header[3] = ' '.join(split_line[:2] + [str(vertex_cnt) + '\n']) #We will randomly choose 20000 points, so change the point cloud info
-
-        point_cloud = data[sampled_int]
-        
-        #Apply rotation by 90 degree along x-axis
-        axis = [1,0,0]
-        axis = axis / norm(axis)
-        theta = math.pi/2
-        rot = Rotation.from_rotvec(theta * axis)
-
-        new_point_cloud = rot.apply(point_cloud[:,:3])
-
-        # Saving point cloud
-        out_filename = 'rotated_pc.ply'
-        with open('point_cloud/' + out_filename,'w') as output_file:
-            output_file.writelines(header)
-            for line in new_point_cloud.tolist():
-                print_line = ''
-                for item in line:
-                    print_line += "{:.5f}".format(item) + ' '
-                print_line += '\n'
-                output_file.write(print_line)
-        print('Rotation completed')
-        
-        #return out_filename
-    
-    print("Rotation time:", time.time() - start)
-    queue.put(out_filename)
-
-    
-            
-    #finally:
-    #    pipeline.stop()
-    #    print("Pipeline finished")
 
 
 if __name__ == '__main__':

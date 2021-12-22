@@ -13,7 +13,8 @@ import math
 import numpy as np
 from gtts import gTTS
 from playsound import playsound
-from multiprocessing import Process, Queue
+import multiprocessing as mp
+from multiprocessing import Process, Queue, Pipe, Array
 import rs_snapshot_rotation
 import requests
 import argparse
@@ -23,11 +24,11 @@ import json
 sys.path.append(os.path.join(ROOT_DIR, 'votenet_tf'))
 import votenet_inference
 
-#SERVER_ADDRESS = "http://127.0.0.1"
 SERVER_ADDRESS = "127.0.0.1"
 SERVER_PORT = 5000
 
 SERVER_ADDRESS_PORT = SERVER_ADDRESS + ":" + str(SERVER_PORT)
+
 
 def parse_opt():
     parser = argparse.ArgumentParser()
@@ -37,7 +38,7 @@ def parse_opt():
     return FLAGS
 
 def send_request_wrapper(queue):
-    res = requests.get(SERVER_ADDRESS_PORT + "/depth_snapshot")
+    res = requests.get("http://" + SERVER_ADDRESS_PORT + "/depth_snapshot")
     print(res)
     pc_path = res.json()['pc_path']
     img_path = res.json()['img_path']
@@ -136,6 +137,11 @@ if __name__ == "__main__":
             # if API request succeeded but no transcription was returned,
             #     re-prompt the user to say their guess again. Do this up
             #     to PROMPT_LIMIT times
+
+    p0_parent_conn, p0_child_conn = Pipe()
+    p0 = Process(target=votenet_inference.run_inference, \
+                    args=(p0_child_conn,))
+    p0.start()
     
     while True:            
         proceedToFindTarget = False
@@ -205,15 +211,18 @@ if __name__ == "__main__":
                 
                 
                 if target_obj in SUPPORTED_CLASS:                            
-                    start = time.time()   
+                    start = time.time()  
+                    """
+                    Using shared array for multiprocessing... Replaced
+                    point_cloud_shared = np.frombuffer(Array('d', 20000 * 3).get_obj(), dtype='d').reshape((20000,3))
+                    img_shared = np.frombuffer(Array('i', 480 * 640 * 3).get_obj(), dtype='i').reshape((480,640,3))
+                    Rtilt_shared = np.frombuffer(Array('d', 9).get_obj(), dtype='d')
+                    K_shared = np.frombuffer(Array('d', 9).get_obj(), dtype='d')
+                    """
                     
                     #q0, p0: Queue/Process for votenet
                     #q1, p1: Queue/Process for depth image(camera)
-                    q0 = Queue()                             
-                    p0 = Process(target=votenet_inference.votenet_inference, args=(q0,))
-                    p0.start()  
-
-                    print("Starting to take depth snapshot")
+                    print("Starting to take depth snapshot...")
                     
                     #Take depth image from Realsense camera
                     q1 = Queue()
@@ -234,8 +243,9 @@ if __name__ == "__main__":
                         print("Server Active")                    
                         p1 = Process(target=send_request_wrapper, args=(q1,))
                     else:
-                        print("Server Inctive")                    
+                        print("Server Inactive")                    
                         p1 = Process(target=rs_snapshot_rotation.take_snapshot_rotation, args=(q1,))                                            
+                        
                     
                     p1.start()
                     
@@ -246,21 +256,26 @@ if __name__ == "__main__":
                     playsound('audio_files/finditforyou.mp3')   
                     
                     
-                    pc_path = q1.get()
-                    img_path = q1.get()
-                    (Rtilt, K) = q1.get()
-                    p1.join()
+                    #p1.join()
+                    print("P1 joined")                    
+                    #point_cloud = q1.get()                    
+                    #img_path = q1.get()
+                    #(Rtilt, K) = q1.get()
+                    #q1.close()                                       
+                                        
+                    p0_parent_conn.send(q1.get())
+                    p0_parent_conn.send(q1.get())
+                    p0_parent_conn.send(q1.get())
+                    #p0_parent_conn.send("START_INFERENCE")
+
                     
-                    q0.put(pc_path)                            
-                    q0.put(img_path)
-                    q0.put((Rtilt, K))
-                    
-                    p0.join()
-                    
-                    predicted_class = q0.get()
+                    #p0.join()                    
+                    #predicted_class = q0.get()     
+                    predicted_class = p0_parent_conn.recv()                    
                     end = time.time()
-                    print("Total runtime multi processing", end - start)  
-                    p0.terminate()         
+                    print("Total runtime multi processing", end - start)                      
+                    #p0.terminate()         
+                    
                     
                     targets = []
                     person_found = []
@@ -268,11 +283,11 @@ if __name__ == "__main__":
 
                     if server_on:
                         #Turn on streaming again                    
-                        pause_res = requests.get(SERVER_ADDRESS_PORT + "/pause_onoff")
+                        pause_res = requests.get("http://" + SERVER_ADDRESS_PORT + "/pause_onoff")
 
-                    for item in predicted_class[0][0]:
+                    for item in predicted_class[0]:
                         if target_obj == 'desk' and item[0] in [CLASS2TYPE_DICT['desk'], CLASS2TYPE_DICT['table']] \
-                        or item[0].numpy() == CLASS2TYPE_DICT[target_obj]:
+                        or item[0] == CLASS2TYPE_DICT[target_obj]:
                         #if item[0] == 'chair':
                             found = {}
                             found['center'] = np.mean(item[1], axis=0)
@@ -283,8 +298,8 @@ if __name__ == "__main__":
                             boxes.append(item[1].tolist())
                     
                     #Find a person
-                    for item in predicted_class[0][0]:
-                        if item[0].numpy() == CLASS2TYPE_DICT['person']:
+                    for item in predicted_class[0]:
+                        if item[0] == CLASS2TYPE_DICT['person']:
                             found = {}
                             found['center'] = np.mean(item[1], axis=0)
                             found['dist'] = np.linalg.norm(found['center'])
@@ -337,21 +352,17 @@ if __name__ == "__main__":
                         print(instructions)
 
                         if server_on:
-                            requests.post(SERVER_ADDRESS_PORT + "/get_boxes", json={'boxes':boxes})
+                            requests.post("http://" + SERVER_ADDRESS_PORT + "/get_boxes", json={'boxes':boxes})
                         
                         playsound('audio_files/guidance.mp3')
 
                     if p1.is_alive():
+                        print("P1 still alive, kill")
                         p1.terminate()
-                        p1.join()
-                    else:
-                        p1.join()
-                    
-                    
-                    
+                        p1.join()                    
                     
                     time.sleep(3)
-                        
+
             
                         
             break

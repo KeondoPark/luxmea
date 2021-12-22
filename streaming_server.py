@@ -11,6 +11,7 @@ from scipy.spatial.transform import Rotation
 from numpy.linalg import norm
 import array
 from io import BytesIO
+from skimage.metrics import structural_similarity as ssim
 
 import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +33,7 @@ class AppState:
         self.color = True
         self.boxes = None
         self.flicker_cnt = 0
+        self.detect_change = False
 
     def reset(self):
         self.pitch, self.yaw, self.distance = 0, 0, 2
@@ -207,8 +209,33 @@ def pointcloud(out, verts, texcoords, color, painter=True):
     # perform uv-mapping
     out[i[m], j[m]] = color[u[m], v[m]]
 
+def draw_boxes(out, boxes):
+    for box in boxes:
+        #Find edges of boxes(Exclude diagonal lines)
+        edges = {}                    
+        for i in range(len(box)):
+            for j in range(i):   
+                v = tuple(np.round(box[i] - box[j], 3))
+                minus_v = tuple(np.round(box[j] - box[i], 3))
+                # Count the number of vectors
+                if v in edges:                    
+                    edges[v].append((i,j))
+                elif minus_v in edges:
+                    edges[minus_v].append((i,j))
+                else:
+                    edges[v] = [(i,j)]                    
+        
+        #Draw lines
+        for k, v in edges.items():
+            # If there are 4 identical vecs, it is edge
+            if len(v) == 4:
+                for (i,j) in v:
+                    line3d(out, view(box[i]), view(box[j]), (0, 0, 0xff), 1)
+
+
 def gen_frames():  # generate frame by frame from camera    
-    while True:        
+    prev_image = None
+    while True:                
         # Grab camera data
         if not state.paused:
             # Wait for a coherent pair of frames: depth and color
@@ -226,6 +253,15 @@ def gen_frames():  # generate frame by frame from camera
 
             depth_image = np.asanyarray(depth_frame.get_data())
             color_image = np.asanyarray(color_frame.get_data())
+
+            gray_image = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
+            if prev_image is not None:                
+                ssim_metric = ssim(prev_image, gray_image)                
+                if ssim_metric < 0.95:
+                    self.detect_change = True
+
+                print(ssim_metric)
+            prev_image = gray_image
 
             depth_colormap = np.asanyarray(
                 colorizer.colorize(depth_frame).get_data())
@@ -266,35 +302,13 @@ def gen_frames():  # generate frame by frame from camera
             if state.boxes is not None:
                 state.increase_flikcer_cnt() # Increase flicker count
                 if state.flicker_cnt % 3 == 0:                
-                    for box in state.boxes:
-                        #Find edges of boxes(Exclude diagonal lines)
-                        edges = {}                    
-                        for i in range(len(box)):
-                            for j in range(i):   
-                                v = tuple(np.round(box[i] - box[j], 3))
-                                minus_v = tuple(np.round(box[j] - box[i], 3))
-                                # Count the number of vectors
-                                if v in edges:                    
-                                    edges[v].append((i,j))
-                                elif minus_v in edges:
-                                    edges[minus_v].append((i,j))
-                                else:
-                                    edges[v] = [(i,j)]                    
-                        
-                        #Draw lines
-                        for k, v in edges.items():
-                            # If there are 4 identical vecs, it is edge
-                            if len(v) == 4:
-                                for (i,j) in v:
-                                    line3d(out, view(box[i]), view(box[j]), (0, 0, 0xff), 1)
+                    draw_boxes(out, state.boxes)                    
                 
                 if state.flicker_cnt >= 30:
                     state.reset_boxes()
 
         
-            dt = time.time() - now
-            
-            
+            dt = time.time() - now            
 
             ret, buffer = cv2.imencode('.jpg', out)
             frame = buffer.tobytes()
