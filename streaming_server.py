@@ -12,6 +12,9 @@ from numpy.linalg import norm
 import array
 from io import BytesIO
 from skimage.metrics import structural_similarity as ssim
+import multiprocessing as mp
+from multiprocessing import Process, Queue, Pipe, Array
+import voice_command
 
 import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +36,11 @@ class AppState:
         self.color = True
         self.boxes = None
         self.flicker_cnt = 0
-        self.detect_change = False
+        self.detecting = False
+        
+        self.q1 = Queue()
+        self.p1 = Process(target=voice_command.auto_detect, args=(self.q1,))
+        self.p1.start()
 
     def reset(self):
         self.pitch, self.yaw, self.distance = 0, 0, 2
@@ -257,10 +264,12 @@ def gen_frames():  # generate frame by frame from camera
             gray_image = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
             if prev_image is not None:                
                 ssim_metric = ssim(prev_image, gray_image)                
-                if ssim_metric < 0.95:
-                    self.detect_change = True
-
-                print(ssim_metric)
+                
+                if ssim_metric < 0.95 and not state.detecting:                    
+                    print(ssim_metric)
+                    state.detecting = True
+                    state.q1.put('START')
+                
             prev_image = gray_image
 
             depth_colormap = np.asanyarray(
@@ -399,6 +408,13 @@ def pause_onoff():
         state.paused = False
     else:
         state.paused = True
+    return jsonify({'success':True})
+
+@app.route('/end_detecting')
+def end_detecting():
+    """Detecting ended, change status"""    
+    state.detecting = False
+
     return jsonify({'success':True})
 
 @app.route('/get_boxes', methods=['POST'])
