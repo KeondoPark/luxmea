@@ -406,6 +406,38 @@ def find_target(ignore_wakeup=False, target_obj=None):
                     time.sleep(3)
         break      
 
+def detect_person(image_input):
+
+    from pycoral.adapters import common
+    from pycoral.adapters import detect
+    from pycoral.utils.dataset import read_label_file
+    from pycoral.utils.edgetpu import make_interpreter
+    label_path = os.path.join(BASE_DIR, 'coral_files', 'coco_labels.txt')
+    model_path = os.path.join(BASE_DIR, 'coral_files', 'ssd_mobilenet_v2_coco_quant_postprocess_edgetpu.tflite')
+    print(model_path)
+    image = Image.fromarray(image_input)
+    print(image)
+
+    labels = read_label_file(label_path) 
+    print("labels", labels)
+    interpreter = make_interpreter(model_path)
+    print("INterpreter made")
+    interpreter.allocate_tensors()    
+    print("Tensor allocated")
+    _, scale = common.set_resized_input(
+        interpreter, image.size, lambda size: image.resize(size, Image.ANTIALIAS))
+    print("Before invoke")
+    interpreter.invoke()
+    objs = detect.get_objects(interpreter, 0.4, scale)
+    print(objs)
+    for obj in objs:
+        print(labels.get(obj.id, obj.id))
+        print('  id:    ', obj.id)
+        print('  score: ', obj.score)
+        print('  bbox:  ', obj.bbox)
+
+    return False
+
 
 def auto_detect(queue):
     # create recognizer and mic instances
@@ -420,56 +452,62 @@ def auto_detect(queue):
 
 
     while True:
-        if queue.get() == 'START':
-
-            start = time.time()   
-            
-            #q0, p0: Queue/Process for votenet
-            #q1, p1: Queue/Process for depth image(camera)
-            print("Starting to take depth snapshot...")
-            
-            #Take depth image from Realsense camera
-            q1 = Queue()                   
-
-            server_on = check_server_on()
-
-            # and then check the response...
-            if server_on:                        
-                print("Server Active")                    
-                p1 = Process(target=send_request_wrapper, args=(q1,))
-            else:
-                print("Server Inactive")                    
-                p1 = Process(target=rs_snapshot_rotation.take_snapshot_rotation, args=(q1,))  
-            
-            p1.start()                    
-            p0_parent_conn.send(q1.get())
-            p0_parent_conn.send(q1.get())
-            p0_parent_conn.send(q1.get())                                                    
-            
-            playsound_intruction('findaroundyou', make_file=True)
-            
-            predicted_class = p0_parent_conn.recv()                    
-            end = time.time()
-            print("Total runtime multi processing", end - start)                      
-            #p0.terminate()     
-
-            decode_results_around(predicted_class, server_on=True)
-
-            if p1.is_alive():
-                print("P1 still alive, kill")
-                p1.terminate()
-                p1.join()   
-
-            if server_on:
+        if queue.get() == 'FIND_PERSON':
+            #person_found = detect_person(queue.get())
+            person_found = True
+            if not person_found:
                 #Turn on streaming again                    
                 res = requests.get("http://" + SERVER_ADDRESS_PORT + "/end_detecting")
+            
+            else:
+                start = time.time()   
+                
+                #q0, p0: Queue/Process for votenet
+                #q1, p1: Queue/Process for depth image(camera)
+                print("Starting to take depth snapshot...")
+                
+                #Take depth image from Realsense camera
+                q1 = Queue()                   
 
-            """
-            if p0.is_alive():
-                print("P0 still alive, kill")
-                p0.terminate()
-                p0.join()                     
-            """
+                server_on = check_server_on()
+
+                # and then check the response...
+                if server_on:                        
+                    print("Server Active")                    
+                    p1 = Process(target=send_request_wrapper, args=(q1,))
+                else:
+                    print("Server Inactive")                    
+                    p1 = Process(target=rs_snapshot_rotation.take_snapshot_rotation, args=(q1,))  
+                
+                p1.start()                    
+                p0_parent_conn.send(q1.get())
+                p0_parent_conn.send(q1.get())
+                p0_parent_conn.send(q1.get())                                                    
+                
+                playsound_intruction('findaroundyou', make_file=True)
+                
+                predicted_class = p0_parent_conn.recv()                    
+                end = time.time()
+                print("Total runtime multi processing", end - start)                      
+                #p0.terminate()     
+
+                decode_results_around(predicted_class, server_on=True)
+
+                if p1.is_alive():
+                    print("P1 still alive, kill")
+                    p1.terminate()
+                    p1.join()   
+
+                if server_on:
+                    #Turn on streaming again                    
+                    res = requests.get("http://" + SERVER_ADDRESS_PORT + "/end_detecting")
+
+                """
+                if p0.is_alive():
+                    print("P0 still alive, kill")
+                    p0.terminate()
+                    p0.join()                     
+                """
 
 if __name__ == "__main__":
     

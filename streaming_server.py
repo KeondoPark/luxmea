@@ -240,6 +240,8 @@ def draw_boxes(out, boxes):
                     line3d(out, view(box[i]), view(box[j]), (0, 0, 0xff), 1)
 
 
+
+
 def gen_frames():  # generate frame by frame from camera    
     prev_image = None
     while True:                
@@ -265,10 +267,14 @@ def gen_frames():  # generate frame by frame from camera
             if prev_image is not None:                
                 ssim_metric = ssim(prev_image, gray_image)                
                 
-                if ssim_metric < 0.95 and not state.detecting:                    
+                if ssim_metric < 0.93 and not state.detecting:                    
                     print(ssim_metric)
                     state.detecting = True
-                    state.q1.put('START')
+                    state.q1.put('FIND_PERSON')
+                    #state.q1.put(color_image)
+
+                    #detect_person(color_image)
+                    #state.q1.put('START')
                 
             prev_image = gray_image
 

@@ -325,6 +325,7 @@ if __name__ == "__main__":
                             found['center'] = np.array([0.0, 0.0, 0.0])
                             found['heading_angle'] = math.pi / 2 
                             person_found.append(found)
+                            print("Person Found!!")
                             
                         # x, y difference from target to person
                         rel_x = target['center'][0] - person_found[0]['center'][0] 
